@@ -1,0 +1,39 @@
+{
+  "name": "painsicle.auth",
+  "version": "1.0.0",
+  "description": "Centralized authentication server for all painsicle platforms",
+  "main": "dist/src/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "npx tsc",
+    "start": "node --no-warnings --loader ts-node/esm dist/src/index.js",
+    "dev": "node --no-warnings --loader ts-node/esm src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thedevyashsaini/auth.painsicle.git"
+  },
+  "author": "thedevyashsaini, steakfisher",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/thedevyashsaini/auth.painsicle/issues"
+  },
+  "homepage": "https://github.com/thedevyashsaini/auth.painsicle#readme",
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@libsql/client": "^0.14.0",
+    "@openauthjs/openauth": "^0.2.4",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.38.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "concurrently": "^9.1.0",
+    "drizzle-kit": "^0.30.1",
+    "nodemon": "^3.1.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}
