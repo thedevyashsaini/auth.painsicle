@@ -2,7 +2,6 @@ import { Adapter } from '@openauthjs/openauth/adapter/adapter';
 import { Oauth2Token } from '@openauthjs/openauth/adapter/oauth2';
 
 export interface Env {
-	CloudflareAuthKV: KVNamespace;
 	CloudflareHtmlKV: KVNamespace;
 	TURSO_CONNECTION_URL: string;
 	TURSO_AUTH_TOKEN: string;

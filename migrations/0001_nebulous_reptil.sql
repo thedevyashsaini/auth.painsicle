@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX `clients_name_unique` ON `clients` (`name`);

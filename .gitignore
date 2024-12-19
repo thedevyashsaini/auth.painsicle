@@ -1,5 +1,3 @@
-wrangler.toml
-
 # Logs
 
 logs
@@ -172,3 +170,4 @@ dist
 
 .dev.vars
 .wrangler/
+wrangler copy.toml

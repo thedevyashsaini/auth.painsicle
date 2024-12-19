@@ -81,10 +81,6 @@ TemporaryAdminBearerToken=""
 # Bind a KV Namespace. Use KV as persistent storage for small key-value pairs.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#kv-namespaces
 [[kv_namespaces]]
-binding = "CloudflareAuthKV"
-id = ""
-
-[[kv_namespaces]]
 binding = "CloudflareHtmlKV"
 id = ""
 
