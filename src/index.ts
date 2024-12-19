@@ -3,15 +3,21 @@ import { type ExecutionContext } from '@cloudflare/workers-types';
 import { subjects } from './subjects';
 import { providerConfig, getProviders } from './providers';
 import { Adapter } from '@openauthjs/openauth/adapter/adapter';
-import { Env, Value } from './types';
+import { Env, ProviderObject, Value } from './types';
 import { db as dbInit } from './db/index';
 import { SelectClient, InsertClient, clientTable, kvTable, usersTable, SelectUser as User } from './db/schema';
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { DrizzleStorage } from './storage/drizzle';
 import { LibSQLDatabase } from 'drizzle-orm/libsql';
+import { Oauth2Token } from '@openauthjs/openauth/adapter/oauth2';
+import { THEME_TERMINAL, THEME_VERCEL } from '@openauthjs/openauth/ui/theme';
 
-async function getUser(email: string, name: string, pfp: string, provider: string, db: LibSQLDatabase): Promise<User> {
+type UserWithToken = Omit<User, 'providers'> & {
+	providers: ProviderObject[];
+};
+
+async function getUser(email: string, name: string, pfp: string, provider: string, db: LibSQLDatabase, tokenset: Oauth2Token): Promise<UserWithToken> {
 	const user = (await db.select().from(usersTable).where(eq(usersTable.email, email)).get()) as User;
 
 	if (user) {
@@ -25,9 +31,31 @@ async function getUser(email: string, name: string, pfp: string, provider: strin
 			await db.update(usersTable).set(update).where(eq(usersTable.email, email)).execute();
 		}
 
+		const providers: ProviderObject[] = [];
+
+		for (let provider_new of user.providers.split(',')) {
+			if (provider_new == provider) {
+				providers.push({
+					provider: provider_new,
+					tokenset: tokenset,
+				})
+			} else {
+				providers.push({
+					provider: provider_new,
+					tokenset: {
+						access: '',
+						refresh: '',
+						expiry: 0,
+						raw: {},
+					},
+				})
+			}
+		}
+
 		return {
 			...user,
 			...update,
+			providers,
 		};
 	} else {
 		const newUser: User = {
@@ -40,7 +68,17 @@ async function getUser(email: string, name: string, pfp: string, provider: strin
 
 		await db.insert(usersTable).values(newUser).execute();
 
-		return newUser;
+		const providers: ProviderObject[] = [
+			{
+				provider,
+				tokenset,
+			},
+		]
+
+		return {
+			...newUser,
+			providers
+		};
 	}
 }
 
@@ -160,6 +198,7 @@ export default {
 				}
 
 				return authorizer({
+					theme: THEME_TERMINAL, 
 					storage: DrizzleStorage({
 						db,
 						KVtable: kvTable,
@@ -168,7 +207,13 @@ export default {
 					providers: providers,
 					success: async (ctx, value: Value) => {
 						if (value.provider === 'password') {
-							const user = await getUser(value.email, 'mynameisanthonygoneservice', '', 'password', db);
+							const tokenset = {
+								access: '',
+								refresh: '',
+								expiry: 0,
+								raw: {},
+							}
+							const user = await getUser(value.email, '', '', 'password', db, tokenset);
 
 							return ctx.subject('user', user);
 						} else if (value.provider === 'github') {
@@ -191,7 +236,6 @@ export default {
 							}
 
 							const userInfo = (await response.json()) as { avatar_url: string; name: string; email: string | null };
-
 
 							if (!userInfo.email) {
 								const emailResponse = await fetch('https://api.github.com/user/emails', {
@@ -220,9 +264,10 @@ export default {
 								userInfo.email = primaryEmail.email;
 							}
 
-							const user = await getUser(userInfo.email, userInfo.name, userInfo.avatar_url, 'github', db);
+							const user = await getUser(userInfo.email, userInfo.name, userInfo.avatar_url, 'github', db, tokenset);
 
 							return ctx.subject('user', user);
+
 						} else if (value.provider === 'google') {
 							const { tokenset } = value;
 							const accessToken = tokenset.access;
@@ -241,7 +286,7 @@ export default {
 
 							const userInfo = (await response.json()) as { picture: string; name: string; email: string };
 
-							const user = await getUser(userInfo.email, userInfo.name, userInfo.picture, 'google', db);
+							const user = await getUser(userInfo.email, userInfo.name, userInfo.picture, 'google', db, tokenset);
 
 							return ctx.subject('user', user);
 						}

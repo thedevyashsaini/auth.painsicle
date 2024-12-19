@@ -20,6 +20,11 @@ export interface ProviderConfig {
 
 export type Provider = keyof ProviderConfig;
 
+export type ProviderObject = {
+	provider: string;
+	tokenset: Oauth2Token;
+}
+
 type ExtractValue<T> = T extends Adapter<infer U> ? U : never;
 
 export type Value = {

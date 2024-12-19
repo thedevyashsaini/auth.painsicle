@@ -1,6 +1,5 @@
 import { Adapter } from '@openauthjs/openauth/adapter/adapter';
 import { GithubAdapter } from '@openauthjs/openauth/adapter/github';
-import { Oauth2Token } from '@openauthjs/openauth/adapter/oauth2';
 import { PasswordAdapter } from '@openauthjs/openauth/adapter/password';
 import { PasswordUI } from '@openauthjs/openauth/ui/password';
 import { GoogleAdapter } from '@openauthjs/openauth/adapter/google';
