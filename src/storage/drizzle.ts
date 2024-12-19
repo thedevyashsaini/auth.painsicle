@@ -85,14 +85,14 @@ export function DrizzleStorage(options: DrizzleStorageOptions): StorageAdapter {
 				.where(eq(KVtable.key, joinKey(key)))
 				.get();
 			if (!result) {
-				console.log(`Key not found: ${joinKey(key)}`);
+				// console.log(`Key not found: ${joinKey(key)}`);
 				return;
 			}
 			if (result.expiry && result.expiry < Math.floor(Date.now() / 1000)) {
-				console.log(`Key expired: ${joinKey(key)}`);
+				// console.log(`Key expired: ${joinKey(key)}`);
 				return;
 			}
-			console.log(`Key found: ${joinKey(key)}, Value: ${result.value}`);
+			// console.log(`Key found: ${joinKey(key)}, Value: ${result.value}`);
 			return JSON.parse(result.value) as Record<string, any>;
 		},
 
@@ -107,7 +107,7 @@ export function DrizzleStorage(options: DrizzleStorageOptions): StorageAdapter {
 		},
 
 		async remove(key: string[]) {
-			console.log(`Removing key: ${joinKey(key)}`);
+			// console.log(`Removing key: ${joinKey(key)}`);
 			await db
 				.delete(KVtable)
 				.where(eq(KVtable.key, joinKey(key)))

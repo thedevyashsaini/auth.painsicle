@@ -1,20 +1,47 @@
 import { authorizer } from '@openauthjs/openauth';
-import { CloudflareStorage } from '@openauthjs/openauth/storage/cloudflare';
 import { type ExecutionContext } from '@cloudflare/workers-types';
 import { subjects } from './subjects';
 import { providerConfig, getProviders } from './providers';
 import { Adapter } from '@openauthjs/openauth/adapter/adapter';
 import { Env, Value } from './types';
 import { db as dbInit } from './db/index';
-import { SelectClient, InsertClient, clientTable, kvTable } from './db/schema';
+import { SelectClient, InsertClient, clientTable, kvTable, usersTable, SelectUser as User } from './db/schema';
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { DrizzleStorage } from './storage/drizzle'
+import { DrizzleStorage } from './storage/drizzle';
+import { LibSQLDatabase } from 'drizzle-orm/libsql';
 
-async function getUser(email: string) {
-	// Get user from database
-	// Return user ID
-	return '123';
+async function getUser(email: string, name: string, pfp: string, provider: string, db: LibSQLDatabase): Promise<User> {
+	const user = (await db.select().from(usersTable).where(eq(usersTable.email, email)).get()) as User;
+
+	if (user) {
+		const update: Partial<User> = {
+			...(name && user.name !== name && { name }),
+			...(pfp && user.pfp !== pfp && { pfp }),
+			...(!user.providers.includes(provider) && { providers: `${user.providers},${provider}` }),
+		};
+
+		if (Object.keys(update).length > 0) {
+			await db.update(usersTable).set(update).where(eq(usersTable.email, email)).execute();
+		}
+
+		return {
+			...user,
+			...update,
+		};
+	} else {
+		const newUser: User = {
+			id: uuidv4(),
+			email,
+			name,
+			pfp,
+			providers: provider,
+		};
+
+		await db.insert(usersTable).values(newUser).execute();
+
+		return newUser;
+	}
 }
 
 async function isValidUrl(url: string): Promise<boolean> {
@@ -35,7 +62,7 @@ export default {
 		const db = dbInit(env);
 
 		if (clientId) {
-			const client: SelectClient = await db.select().from(clientTable).where(eq(clientTable.id, clientId)).get() as SelectClient;
+			const client: SelectClient = (await db.select().from(clientTable).where(eq(clientTable.id, clientId)).get()) as SelectClient;
 			if (!client) {
 				throw new Error('Client not found');
 			}
@@ -132,8 +159,6 @@ export default {
 					}
 				}
 
-				console.log(providers);
-
 				return authorizer({
 					storage: DrizzleStorage({
 						db,
@@ -143,12 +168,82 @@ export default {
 					providers: providers,
 					success: async (ctx, value: Value) => {
 						if (value.provider === 'password') {
-							return ctx.subject('user', {
-								id: await getUser(value.email),
-								email: value.email,
-								name: 'John Doe',
-								providers: 'password',
+							const user = await getUser(value.email, 'mynameisanthonygoneservice', '', 'password', db);
+
+							return ctx.subject('user', user);
+						} else if (value.provider === 'github') {
+							const { tokenset } = value;
+							const accessToken = tokenset.access;
+
+							const response = await fetch('https://api.github.com/user', {
+								headers: {
+									Accept: 'application/vnd.github+json',
+									Authorization: `Bearer ${accessToken}`,
+									'X-GitHub-Api-Version': '2022-11-28',
+									'User-Agent': 'Painsicle Auth',
+								},
 							});
+
+							if (!response.ok) {
+								const errorText = await response.text();
+								console.error('Error:', errorText);
+								throw new Error('Error fetching user info');
+							}
+
+							const userInfo = (await response.json()) as { avatar_url: string; name: string; email: string | null };
+
+
+							if (!userInfo.email) {
+								const emailResponse = await fetch('https://api.github.com/user/emails', {
+									headers: {
+										Accept: 'application/vnd.github+json',
+										Authorization: `Bearer ${accessToken}`,
+										'X-GitHub-Api-Version': '2022-11-28',
+										'User-Agent': 'Painsicle Auth',
+									},
+								});
+
+								if (!emailResponse.ok) {
+									const errorText = await emailResponse.text();
+									console.error('Error:', errorText);
+									throw new Error('Error fetching user emails');
+								}
+
+								const emailInfo = (await emailResponse.json()) as { email: string; primary: boolean; verified: boolean }[];
+
+								const primaryEmail = emailInfo.find((e) => e.primary && e.verified);
+
+								if (!primaryEmail) {
+									throw new Error('User primary email not found');
+								}
+
+								userInfo.email = primaryEmail.email;
+							}
+
+							const user = await getUser(userInfo.email, userInfo.name, userInfo.avatar_url, 'github', db);
+
+							return ctx.subject('user', user);
+						} else if (value.provider === 'google') {
+							const { tokenset } = value;
+							const accessToken = tokenset.access;
+
+							const response = await fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
+								headers: {
+									Authorization: `Bearer ${accessToken}`,
+								},
+							});
+
+							if (!response.ok) {
+								const errorText = await response.text();
+								console.error('Error:', errorText);
+								throw new Error('Error fetching user info');
+							}
+
+							const userInfo = (await response.json()) as { picture: string; name: string; email: string };
+
+							const user = await getUser(userInfo.email, userInfo.name, userInfo.picture, 'google', db);
+
+							return ctx.subject('user', user);
 						}
 						throw new Error('Invalid provider');
 					},

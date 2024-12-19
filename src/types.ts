@@ -25,3 +25,5 @@ type ExtractValue<T> = T extends Adapter<infer U> ? U : never;
 export type Value = {
 	[K in keyof ProviderConfig]: { provider: K } & ExtractValue<ProviderConfig[K]>;
 }[keyof ProviderConfig];
+
+export type User = { id: string, name: string, providers: string, pfp: string, email: string }

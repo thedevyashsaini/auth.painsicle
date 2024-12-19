@@ -13,8 +13,9 @@ export const providerConfig = (env: Env) => ({
 		PasswordUI({
 			sendCode: async (email, code) => {
 				console.log(email, code);
+				// Have to implement this
 			},
-		})
+		}) // change this whole object to our own implementation
 	),
 	github: GithubAdapter({
 		clientID: env.GITHUB_CLIENT_ID!,

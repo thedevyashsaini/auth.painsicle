@@ -6,6 +6,7 @@ export const subjects = createSubjects({
     id: z.string(),
     email: z.string(),
     name: z.string(),
-    providers: z.string()
+    providers: z.string(),
+    pfp: z.string(),
   }),
 })
