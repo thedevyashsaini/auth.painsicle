@@ -1,9 +1,9 @@
 import { authorizer } from '@openauthjs/openauth';
 import { type ExecutionContext } from '@cloudflare/workers-types';
 import { subjects } from './subjects';
-import { providerConfig, getProviders } from './providers';
+import { providerConfig, getProvidersWithScopes } from './providers';
 import { Adapter } from '@openauthjs/openauth/adapter/adapter';
-import { Env, ProviderObject, Value } from './types';
+import { Env, ProviderConfig, ProviderObject, Value } from './types';
 import { db as dbInit } from './db/index';
 import { SelectClient, InsertClient, clientTable, kvTable, usersTable, SelectUser as User } from './db/schema';
 import { eq } from 'drizzle-orm';
@@ -11,13 +11,22 @@ import { v4 as uuidv4 } from 'uuid';
 import { DrizzleStorage } from './storage/drizzle';
 import { LibSQLDatabase } from 'drizzle-orm/libsql';
 import { Oauth2Token } from '@openauthjs/openauth/adapter/oauth2';
-import { THEME_TERMINAL, THEME_VERCEL } from '@openauthjs/openauth/ui/theme';
+import { THEME_TERMINAL } from '@openauthjs/openauth/ui/theme';
+import { UnauthorizedClientError } from '@openauthjs/openauth/error';
+import { Select } from './select';
 
 type UserWithToken = Omit<User, 'providers'> & {
 	providers: ProviderObject[];
 };
 
-async function getUser(email: string, name: string, pfp: string, provider: string, db: LibSQLDatabase, tokenset: Oauth2Token): Promise<UserWithToken> {
+async function getUser(
+	email: string,
+	name: string,
+	pfp: string,
+	provider: string,
+	db: LibSQLDatabase,
+	tokenset: Oauth2Token
+): Promise<UserWithToken> {
 	const user = (await db.select().from(usersTable).where(eq(usersTable.email, email)).get()) as User;
 
 	if (user) {
@@ -38,7 +47,7 @@ async function getUser(email: string, name: string, pfp: string, provider: strin
 				providers.push({
 					provider: provider_new,
 					tokenset: tokenset,
-				})
+				});
 			} else {
 				providers.push({
 					provider: provider_new,
@@ -48,7 +57,7 @@ async function getUser(email: string, name: string, pfp: string, provider: strin
 						expiry: 0,
 						raw: {},
 					},
-				})
+				});
 			}
 		}
 
@@ -73,11 +82,11 @@ async function getUser(email: string, name: string, pfp: string, provider: strin
 				provider,
 				tokenset,
 			},
-		]
+		];
 
 		return {
 			...newUser,
-			providers
+			providers,
 		};
 	}
 }
@@ -107,7 +116,7 @@ export default {
 			if (client.domains) {
 				const domains: string[] = client.domains.split(',');
 				if (redirectUri && !domains.includes(new URL(redirectUri).hostname)) {
-					throw new Error('Invalid redirect_uri');
+					throw new UnauthorizedClientError(clientId, redirectUri);
 				}
 			}
 		}
@@ -116,22 +125,21 @@ export default {
 			case '/':
 				return new Response("It's not for you dickhead!!");
 
-			case '/privacy_policy':
-				const htmlContent: string | null = await env.CloudflareHtmlKV.get('privacy_policy.html');
-				if (!htmlContent) {
-					return new Response('Privacy Policy not found', { status: 404 });
-				}
-				return new Response(htmlContent, {
-					headers: { 'Content-Type': 'text/html' },
-				});
-
 			case '/terms_and_conditions':
-				// Serve the terms and conditions HTML file from KV namespace
-				const termsHtmlContent = await env.CloudflareHtmlKV.get('terms_and_conditions.html');
+				const termsHtmlContent = await env.StaticFilesKV.get('terms_and_conditions.html');
 				if (!termsHtmlContent) {
 					return new Response('Terms and Conditions not found', { status: 404 });
 				}
 				return new Response(termsHtmlContent, {
+					headers: { 'Content-Type': 'text/html' },
+				});
+
+			case '/privacy_policy':
+				const privacyHtmlContent = await env.StaticFilesKV.get('privacy_policy.html');
+				if (!privacyHtmlContent) {
+					return new Response('Terms and Conditions not found', { status: 404 });
+				}
+				return new Response(privacyHtmlContent, {
 					headers: { 'Content-Type': 'text/html' },
 				});
 
@@ -186,19 +194,31 @@ export default {
 				return new Response(JSON.stringify(newClient), { status: 201 });
 
 			default:
-				let providers: Record<string, Adapter<any>> = providerConfig(env);
+				if (pathname.startsWith('/static/')) {
+					return serveStatic(request, env.StaticFilesKV);
+				}
+
+				let providers: Record<keyof ProviderConfig, Adapter<any>> = providerConfig(env);
+				let providersHidden: Record<string, Record<"hide", boolean>> = {};
 
 				if (redirectUri) {
-					const temp: Record<string, Adapter<any>> | Response = getProviders(redirectUri, env);
+					const temp:
+						| {
+								providers: typeof providers;
+								providersHidden: Record<keyof ProviderConfig, Record<"hide", boolean>>;
+						  }
+						| Response = getProvidersWithScopes(redirectUri, env);
 					if (temp instanceof Response) {
 						return temp;
 					} else if (Object.keys(temp).length > 0) {
-						providers = temp;
+						providers = temp.providers;
+						providersHidden = temp.providersHidden;
 					}
 				}
 
 				return authorizer({
-					theme: THEME_TERMINAL, 
+					theme: THEME_TERMINAL,
+					select: Select(env, { providers: providersHidden }),
 					storage: DrizzleStorage({
 						db,
 						KVtable: kvTable,
@@ -212,7 +232,7 @@ export default {
 								refresh: '',
 								expiry: 0,
 								raw: {},
-							}
+							};
 							const user = await getUser(value.email, '', '', 'password', db, tokenset);
 
 							return ctx.subject('user', user);
@@ -267,7 +287,6 @@ export default {
 							const user = await getUser(userInfo.email, userInfo.name, userInfo.avatar_url, 'github', db, tokenset);
 
 							return ctx.subject('user', user);
-
 						} else if (value.provider === 'google') {
 							const { tokenset } = value;
 							const accessToken = tokenset.access;
@@ -296,3 +315,47 @@ export default {
 		}
 	},
 };
+
+async function serveStatic(request: Request, StaticFilesKV: KVNamespace): Promise<Response> {
+	const url = new URL(request.url);
+	const path = url.pathname.replace('/static/', '');
+	const fileKey = `static/${path}`;
+
+	try {
+		const file = await StaticFilesKV.get(fileKey, { type: 'arrayBuffer' });
+		if (!file) {
+			return new Response('File not found', { status: 404 });
+		}
+
+		return new Response(file, {
+			headers: { 'Content-Type': getContentType(fileKey) },
+		});
+	} catch (e) {
+		return new Response('File not found', { status: 404 });
+	}
+}
+
+function getContentType(filePath: string): string {
+	const ext = filePath.split('.').pop();
+	switch (ext) {
+		case 'html':
+			return 'text/html';
+		case 'css':
+			return 'text/css';
+		case 'js':
+			return 'application/javascript';
+		case 'json':
+			return 'application/json';
+		case 'png':
+			return 'image/png';
+		case 'svg':
+			return 'image/svg';
+		case 'jpg':
+		case 'jpeg':
+			return 'image/jpeg';
+		case 'gif':
+			return 'image/gif';
+		default:
+			return 'application/octet-stream';
+	}
+}
