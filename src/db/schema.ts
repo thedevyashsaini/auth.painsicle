@@ -12,6 +12,7 @@ export const clientTable = sqliteTable("clients", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
   domains: text("domains"),
+  provider: text("provider").notNull().default("github"),
   logo: text("logo"),
 });
 

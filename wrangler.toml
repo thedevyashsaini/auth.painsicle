@@ -82,7 +82,7 @@ TemporaryAdminBearerToken=""
 # Bind a KV Namespace. Use KV as persistent storage for small key-value pairs.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#kv-namespaces
 [[kv_namespaces]]
-binding = "CloudflareHtmlKV"
+binding = "StaticFilesKV"
 id = ""
 
 # Bind an mTLS certificate. Use to present a client certificate when communicating with another service.

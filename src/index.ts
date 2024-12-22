@@ -1,9 +1,9 @@
 import { authorizer } from '@openauthjs/openauth';
 import { type ExecutionContext } from '@cloudflare/workers-types';
 import { subjects } from './subjects';
-import { providerConfig, getProvidersWithScopes } from './providers';
+import { providerConfig, getProvidersWithScopes, availableProviders } from './providers';
 import { Adapter } from '@openauthjs/openauth/adapter/adapter';
-import { Env, ProviderConfig, ProviderObject, Value } from './types';
+import { Env, Provider, ProviderConfig, ProviderObject, Value } from './types';
 import { db as dbInit } from './db/index';
 import { SelectClient, InsertClient, clientTable, kvTable, usersTable, SelectUser as User } from './db/schema';
 import { eq } from 'drizzle-orm';
@@ -108,15 +108,37 @@ export default {
 		const redirectUri = url.searchParams.get('redirect_uri');
 		const db = dbInit(env);
 
+		let authorizedProviders: Provider[] = availableProviders;
+
 		if (clientId) {
 			const client: SelectClient = (await db.select().from(clientTable).where(eq(clientTable.id, clientId)).get()) as SelectClient;
 			if (!client) {
-				throw new Error('Client not found');
+				return returnError('Client not found! visit https://auth-painsicle.thedevyash.workers.dev/client/new to create on if you don\' have one yet.', 404);
 			}
 			if (client.domains) {
 				const domains: string[] = client.domains.split(',');
-				if (redirectUri && !domains.includes(new URL(redirectUri).hostname)) {
-					throw new UnauthorizedClientError(clientId, redirectUri);
+				if (redirectUri) {
+					const redirectHostname = new URL(redirectUri).hostname;
+					if (!['localhost', '127.0.0.1'].includes(redirectHostname) && !domains.includes(redirectHostname)) {
+						return returnError(`Unauthorized Redirect URI: client ${clientId} is not authorized to use ${redirectUri}`, 400);
+					}
+				}
+			}
+
+			if (redirectUri) {
+				if (client.provider) {
+					authorizedProviders = client.provider.split(',') as Provider[];
+					const providers_param = new URL(redirectUri).searchParams.get('providers');
+					if (providers_param) {
+						const clientRequestedProviders: Provider[] = Object.keys(JSON.parse(atob(providers_param || ''))) as Provider[];
+						for (const provider of clientRequestedProviders) {
+							if (!client.provider.includes(provider)) {
+								return returnError('Unauthorized provider requested: ' + provider, 400);
+							}
+						}
+					}
+				} else {
+					return returnError('No authorized providers found.', 400);
 				}
 			}
 		}
@@ -143,7 +165,25 @@ export default {
 					headers: { 'Content-Type': 'text/html' },
 				});
 
-			case '/api/client/new':
+			case '/client/new':
+				if (request.method == 'GET') {
+					// serve html from html file clientsPage.html
+					const clientsHtmlContent = await env.StaticFilesKV.get('clientsPage.html');
+					if (!clientsHtmlContent) {
+						return new Response('Clients Page not found', { status: 404 });
+					}
+					return new Response(clientsHtmlContent, {
+						headers: { 'Content-Type': 'text/html' },
+					});
+				} else {
+					return new Response('Method not allowed', { status: 405 });
+				}
+
+			case '/api/v1/client/new':
+				if (request.method !== 'POST') {
+					return new Response('Method Not Allowed', { status: 405 });
+				}
+
 				const authHeader = request.headers.get('Authorization');
 				if (!authHeader || !authHeader.startsWith('Bearer ')) {
 					return new Response('Unauthorized', { status: 401 });
@@ -154,26 +194,44 @@ export default {
 					return new Response('Forbidden', { status: 403 });
 				}
 
-				const name = url.searchParams.get('name');
-				const domains = url.searchParams.get('domains');
-				const logo = url.searchParams.get('logo');
+				let payload;
+				try {
+					payload = await request.json();
+				} catch (e) {
+					return new Response('Invalid JSON payload', { status: 400 });
+				}
 
-				if (!name) {
+				const {
+					clientName,
+					domains,
+					providers: clientProviders,
+					logo,
+				} = payload as {
+					clientName: string;
+					domains: string;
+					providers: string;
+					logo: string;
+				};
+
+				if (!clientName) {
 					return new Response('Client Name is required!', { status: 400 });
 				}
 
-				const existingClient = await db.select().from(clientTable).where(eq(clientTable.name, name)).get();
+				const existingClient = await db.select().from(clientTable).where(eq(clientTable.name, clientName)).get();
 				if (existingClient) {
 					return new Response('Client with this name already exists!', { status: 400 });
 				}
 
-				if (domains) {
-					const domainList = domains.split(',');
-					const domainRegex = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-					for (const domain of domainList) {
-						if (!domainRegex.test(domain)) {
-							return new Response(`Invalid domain format - ${domain}!`, { status: 400 });
-						}
+				const domainList = domains.split(',');
+
+				if (domainList.length == 0) {
+					return new Response('At least one domain is required!', { status: 400 });
+				}
+
+				const domainRegex = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+				for (const domain of domainList) {
+					if (!domainRegex.test(domain)) {
+						return new Response(`Invalid domain format - ${domain}!`, { status: 400 });
 					}
 				}
 
@@ -181,12 +239,22 @@ export default {
 					return new Response('Invalid logo URL!', { status: 400 });
 				}
 
+				if (clientProviders) {
+					const providerList = clientProviders.split(',') as typeof availableProviders;
+					for (const provider of providerList) {
+						if (!availableProviders.includes(provider)) {
+							return new Response(`Invalid provider - ${provider}!`, { status: 400 });
+						}
+					}
+				}
+
 				const clientId: string = uuidv4();
 				const newClient: InsertClient = {
 					id: clientId,
-					name,
-					domains: domains || '',
-					logo: logo || '',
+					name: clientName,
+					domains: domains,
+					provider: clientProviders,
+					logo: logo,
 				};
 
 				await db.insert(clientTable).values(newClient).execute();
@@ -199,15 +267,15 @@ export default {
 				}
 
 				let providers: Record<keyof ProviderConfig, Adapter<any>> = providerConfig(env);
-				let providersHidden: Record<string, Record<"hide", boolean>> = {};
+				let providersHidden: Record<string, Record<'hide', boolean>> = {};
 
 				if (redirectUri) {
 					const temp:
 						| {
 								providers: typeof providers;
-								providersHidden: Record<keyof ProviderConfig, Record<"hide", boolean>>;
+								providersHidden: Record<keyof ProviderConfig, Record<'hide', boolean>>;
 						  }
-						| Response = getProvidersWithScopes(redirectUri, env);
+						| Response = getProvidersWithScopes(redirectUri, authorizedProviders, env);
 					if (temp instanceof Response) {
 						return temp;
 					} else if (Object.keys(temp).length > 0) {
@@ -358,4 +426,9 @@ function getContentType(filePath: string): string {
 		default:
 			return 'application/octet-stream';
 	}
+}
+
+
+const returnError = (error: string, code: number): Response => {
+	return new Response(error, {status: code});
 }

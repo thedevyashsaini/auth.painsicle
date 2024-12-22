@@ -1,0 +1,1 @@
+ALTER TABLE `clients` ADD `provider` text DEFAULT 'github' NOT NULL;

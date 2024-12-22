@@ -3,7 +3,7 @@ import { GithubAdapter } from '@openauthjs/openauth/adapter/github';
 import { PasswordAdapter } from '@openauthjs/openauth/adapter/password';
 import { PasswordUI } from '@openauthjs/openauth/ui/password';
 import { GoogleAdapter } from '@openauthjs/openauth/adapter/google';
-import { Env, ProviderConfig } from './types';
+import { Env, Provider, ProviderConfig } from './types';
 
 export const availableProviders = ['password', 'github', 'google'] as (keyof ProviderConfig)[];
 
@@ -17,7 +17,7 @@ export const providerConfig = (
 	>
 ): Record<keyof ProviderConfig, Adapter> => {
 	const defaultGithubScopes = ['user:email', 'read:user'];
-	console.log(providers);
+	// console.log(providers);
 	return {
 		password: PasswordAdapter(
 			PasswordUI({
@@ -48,6 +48,7 @@ export const providerConfig = (
 
 export const getProvidersWithScopes = (
 	redirectUri: string,
+	authorizedProviders: Provider[],
 	env: Env
 ):
 	| {
@@ -74,7 +75,7 @@ export const getProvidersWithScopes = (
 				providersHidden[i].hide = false;
 			}
 		} else {
-			Object.keys(providersHidden).forEach((provider) => {
+			authorizedProviders.forEach((provider) => {
 				providersHidden[provider].hide = false;
 			});
 		}
@@ -83,7 +84,7 @@ export const getProvidersWithScopes = (
 
 		const providerObj: { providers: typeof providers; providersHidden: typeof providersHidden } = { providers, providersHidden };
 
-		console.log(providerObj);
+		// console.log(providerObj);
 
 		return providerObj;
 	} catch (e) {
