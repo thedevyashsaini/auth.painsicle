@@ -24,7 +24,6 @@ enabled = true
 # - https://developers.cloudflare.com/workers/configuration/secrets/
 [vars]
 TURSO_CONNECTION_URL=""
-# TURSO_AUTH_TOKEN=""
 TURSO_AUTH_TOKEN=""
 GITHUB_CLIENT_ID=""
 GITHUB_CLIENT_SECRET=""

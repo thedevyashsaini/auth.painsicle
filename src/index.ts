@@ -12,8 +12,8 @@ import { DrizzleStorage } from './storage/drizzle';
 import { LibSQLDatabase } from 'drizzle-orm/libsql';
 import { Oauth2Token } from '@openauthjs/openauth/adapter/oauth2';
 import { THEME_TERMINAL } from '@openauthjs/openauth/ui/theme';
-import { UnauthorizedClientError } from '@openauthjs/openauth/error';
 import { Select } from './select';
+import { isDomainMatch } from '@openauthjs/openauth/util';
 
 type UserWithToken = Omit<User, 'providers'> & {
 	providers: ProviderObject[];
@@ -110,19 +110,15 @@ export default {
 
 		let authorizedProviders: Provider[] = availableProviders;
 
+		let client: SelectClient | undefined;
+
 		if (clientId) {
-			const client: SelectClient = (await db.select().from(clientTable).where(eq(clientTable.id, clientId)).get()) as SelectClient;
+			client = (await db.select().from(clientTable).where(eq(clientTable.id, clientId)).get()) as SelectClient;
 			if (!client) {
-				return returnError('Client not found! visit https://auth-painsicle.thedevyash.workers.dev/client/new to create on if you don\' have one yet.', 404);
-			}
-			if (client.domains) {
-				const domains: string[] = client.domains.split(',');
-				if (redirectUri) {
-					const redirectHostname = new URL(redirectUri).hostname;
-					if (!['localhost', '127.0.0.1'].includes(redirectHostname) && !domains.includes(redirectHostname)) {
-						return returnError(`Unauthorized Redirect URI: client ${clientId} is not authorized to use ${redirectUri}`, 400);
-					}
-				}
+				return returnError(
+					"Client not found! visit https://auth-painsicle.thedevyash.workers.dev/client/new to create on if you don' have one yet.",
+					404
+				);
 			}
 
 			if (redirectUri) {
@@ -293,6 +289,35 @@ export default {
 					}),
 					subjects,
 					providers: providers,
+					allow: async (
+						input: { clientID: string; redirectURI: string; audience?: string | undefined },
+						req: Request
+					): Promise<boolean> => {
+						const redir = new URL(input.redirectURI).hostname;
+						if (redir === 'localhost' || redir === '127.0.0.1') {
+							return true;
+						}
+
+						console.log('Client ID:', input.clientID);
+
+						const client = (await db.select().from(clientTable).where(eq(clientTable.id, input.clientID)).get()) as SelectClient;
+
+						if (!client || !client.domains) {
+							return false;
+						}
+
+						const domains: string[] = client.domains.split(',');
+						if (!domains.includes(redir)) {
+							return false;
+						}
+
+						const forwarded = req.headers.get('x-forwarded-host');
+						const host = forwarded ? new URL(`https://` + forwarded).hostname : new URL(req.headers.get("referer") || "").hostname;
+
+						console.log(redir, host);
+
+						return isDomainMatch(redir, host);
+					},
 					success: async (ctx, value: Value) => {
 						if (value.provider === 'password') {
 							const tokenset = {
@@ -428,7 +453,6 @@ function getContentType(filePath: string): string {
 	}
 }
 
-
 const returnError = (error: string, code: number): Response => {
-	return new Response(error, {status: code});
-}
+	return new Response(error, { status: code });
+};
